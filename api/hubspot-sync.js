@@ -164,7 +164,7 @@ async function associateDealToContact(token, dealId, contactId) {
   );
 }
 
-async function createNoteAndAssociateToContact(token, contactId, noteBody) {
+async function createNote(token, noteBody) {
   const note = await hsFetch("https://api.hubapi.com/crm/v3/objects/notes", {
     token,
     method: "POST",
@@ -175,15 +175,21 @@ async function createNoteAndAssociateToContact(token, contactId, noteBody) {
       }
     }
   });
+  return note.id;
+}
 
-  const noteId = note.id;
-
+async function associateNoteToContact(token, noteId, contactId) {
   await hsFetch(
     `https://api.hubapi.com/crm/v4/objects/notes/${noteId}/associations/contacts/${contactId}/note_to_contact`,
     { token, method: "PUT" }
   );
+}
 
-  return noteId;
+async function associateNoteToDeal(token, noteId, dealId) {
+  await hsFetch(
+    `https://api.hubapi.com/crm/v4/objects/notes/${noteId}/associations/deals/${dealId}/note_to_deal`,
+    { token, method: "PUT" }
+  );
 }
 
 export default async function handler(req, res) {
@@ -191,7 +197,7 @@ export default async function handler(req, res) {
     if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
     const token = process.env.HUBSPOT_PRIVATE_APP_TOKEN;
-    const pipelineId = process.env.HUBSPOT_DEAL_PIPELINE_ID || ""; // optional
+    const pipelineId = process.env.HUBSPOT_DEAL_PIPELINE_ID || ""; // optional but recommended
     const quoteStageId = process.env.HUBSPOT_DEALSTAGE_QUOTE || ""; // required
 
     if (!token) return res.status(500).json({ error: "Missing HUBSPOT_PRIVATE_APP_TOKEN" });
@@ -206,7 +212,9 @@ export default async function handler(req, res) {
       text,
       amountRaw,
       borrower,
-      securityProperty
+      securityProperty,
+      p1SecurityProperty,
+      p2SecurityProperty
     } = req.body || {};
 
     if (!clientEmail) return res.status(400).json({ error: "clientEmail is required" });
@@ -214,7 +222,18 @@ export default async function handler(req, res) {
     const contactId = await upsertContact(token, { clientEmail, clientName });
     const ownerId = await ownerIdByEmail(token, brokerEmail);
 
-    const dealname = `Finance Quote - ${borrower || "Borrower"} - ${securityProperty || clientEmail}`;
+    // Deal name = Address
+    // - two_properties: use Property 1 address
+    // - otherwise: use single securityProperty
+    // - fallback to email
+    const singleAddr = String(securityProperty || "").trim();
+    const p1Addr = String(p1SecurityProperty || "").trim();
+    const p2Addr = String(p2SecurityProperty || "").trim();
+
+    let dealname = singleAddr || clientEmail;
+    if (String(template) === "two_properties") {
+      dealname = p1Addr || singleAddr || clientEmail;
+    }
 
     const existingQuoteDealId = await findOpenQuoteDealForContact(token, contactId, {
       pipelineId: pipelineId || null,
@@ -237,10 +256,19 @@ export default async function handler(req, res) {
       `Template: ${template || ""}\n` +
       (brokerEmail ? `Broker email: ${brokerEmail}\n` : "") +
       (amountRaw ? `Amount (raw): ${amountRaw}\n` : "") +
+      (borrower ? `Borrower: ${borrower}\n` : "") +
+      (singleAddr ? `Address: ${singleAddr}\n` : "") +
+      (String(template) === "two_properties"
+        ? `Property 1: ${p1Addr}\nProperty 2: ${p2Addr}\n`
+        : "") +
       "\n----- GENERATED EMAIL (TEXT) -----\n" +
       (text || "");
 
-    const noteId = await createNoteAndAssociateToContact(token, contactId, noteBody);
+    const noteId = await createNote(token, noteBody);
+
+    // Associate note to BOTH contact and deal
+    await associateNoteToContact(token, noteId, contactId);
+    await associateNoteToDeal(token, noteId, dealId);
 
     res.status(200).json({ ok: true, contactId, dealId, dealMode, noteId, ownerId: ownerId || "" });
   } catch (e) {
