@@ -178,9 +178,10 @@ async function createNote(token, noteBody) {
   return note.id;
 }
 
-async function associateNoteToContact(token, noteId, contactId) {
+async function associateNoteToDeal(token, noteId, dealId) {
+  // v3 association endpoint: note -> deal
   await hsFetch(
-    `https://api.hubapi.com/crm/v4/objects/notes/${noteId}/associations/contacts/${contactId}/note_to_contact`,
+    `https://api.hubapi.com/crm/v3/objects/notes/${noteId}/associations/deals/${dealId}/note_to_deal`,
     { token, method: "PUT" }
   );
 }
