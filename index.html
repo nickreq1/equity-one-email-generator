@@ -1,41 +1,227 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Email Generator</title>
-    <style>
-        body { font-family: Arial, sans-serif; background-color: #f4f4f4; }
-        label { color: white; }
-        input[type='text'], input[type='email'] { margin: 5px 0; padding: 10px; width: 100%; }
-        button { margin-top: 10px; padding: 10px; background-color: #28a745; color: #fff; border: none; cursor: pointer; }
-    </style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Equity One – Email Generator</title>
+  <style>
+    body { font-family: Arial, sans-serif; background:#f4f4f4; margin:0; padding:18px; }
+    .wrap { max-width: 980px; margin: 0 auto; background:#fff; padding:18px; border-radius:10px; }
+    h1 { margin: 0 0 12px; }
+    .grid { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+    label { display:block; font-size:12px; color:#333; margin-bottom:6px; }
+    input, textarea, select { width:100%; padding:10px; border:1px solid #ccc; border-radius:8px; box-sizing:border-box; }
+    textarea { min-height: 90px; }
+    .row { margin-bottom: 12px; }
+    .buttons { display:flex; flex-wrap:wrap; gap:10px; margin-top:12px; }
+    button { padding:10px 12px; border:0; border-radius:8px; cursor:pointer; color:#fff; }
+    .btn-generate { background:#6c757d; }
+    .btn-copy { background:#A4284B; }
+    .btn-send { background:#0b7a3b; }
+    .btn-secondary { background:#1f6feb; }
+    .preview { margin-top:16px; border:1px dashed #bbb; padding:12px; border-radius:8px; background:#fafafa; }
+    .hint { color:#555; font-size:12px; margin-top:6px; }
+    .full { grid-column: 1 / -1; }
+  </style>
 </head>
 <body>
+  <div class="wrap">
     <h1>Email Generator</h1>
-    <form id="emailGenerator">
-        <label for="clientName">Client Name:</label>
-        <input type="text" id="clientName" name="clientName" required>
-        <label for="clientEmail">Client Email:</label>
-        <input type="email" id="clientEmail" name="clientEmail" required>
-        <label for="brokerEmail">Broker Email:</label>
-        <input type="email" id="brokerEmail" name="brokerEmail" required>
-        <button type="submit">Send to HubSpot</button>
-    </form>
-    <script>
-        document.getElementById('emailGenerator').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const clientName = document.getElementById('clientName').value;
-            const clientEmail = document.getElementById('clientEmail').value;
-            const brokerEmail = document.getElementById('brokerEmail').value;
-            const response = await fetch('/api/hubspot-sync', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ clientName, clientEmail, brokerEmail })
-            });
-            const result = await response.json();
-            console.log(result);
-        });
-    </script>
+
+    <div class="grid">
+      <div class="row">
+        <label>Client name</label>
+        <input id="clientName" placeholder="e.g. Alex Smith" />
+      </div>
+      <div class="row">
+        <label>Client email (required for HubSpot)</label>
+        <input id="clientEmail" type="email" placeholder="client@example.com" />
+      </div>
+
+      <div class="row">
+        <label>Broker email (sets Deal Owner where possible)</label>
+        <input id="brokerEmail" type="email" placeholder="broker@example.com" />
+      </div>
+      <div class="row">
+        <label>Template</label>
+        <select id="template">
+          <option value="one">One security property</option>
+          <option value="two">Two security properties</option>
+        </select>
+      </div>
+
+      <div class="row">
+        <label>Borrower</label>
+        <input id="borrower" placeholder="Borrower name" />
+      </div>
+      <div class="row">
+        <label>Security property</label>
+        <input id="securityProperty" placeholder="Address" />
+      </div>
+
+      <div class="row">
+        <label>Amount (raw)</label>
+        <input id="amountRaw" placeholder="e.g. 500000" />
+      </div>
+      <div class="row">
+        <label>Email subject</label>
+        <input id="subject" value="FINANCE QUOTE" />
+      </div>
+
+      <div class="row full">
+        <label>Notes / extra text (optional)</label>
+        <textarea id="extraText" placeholder="Any extra notes for the email body..."></textarea>
+      </div>
+    </div>
+
+    <div class="buttons">
+      <button class="btn-generate" type="button" onclick="generate()">Generate</button>
+      <button class="btn-copy" type="button" onclick="copyHtml()">Copy HTML</button>
+      <button class="btn-copy" type="button" onclick="copyText()">Copy Text</button>
+      <button class="btn-secondary" type="button" onclick="openPipelines()">Find Quote stage IDs</button>
+      <button class="btn-send" type="button" onclick="sendToHubSpot()">Send to HubSpot</button>
+    </div>
+
+    <div class="hint">
+      Outlook tip: when pasting, use <b>Keep Source Formatting</b> to preserve the white label text on maroon.
+    </div>
+
+    <div class="preview">
+      <div style="font-weight:bold;margin-bottom:8px;">Preview (HTML)</div>
+      <div id="preview"></div>
+    </div>
+  </div>
+
+<script>
+  let lastHtml = "";
+  let lastText = "";
+
+  function escapeHtml(s) {
+    return String(s ?? "")
+      .replaceAll("&","&amp;")
+      .replaceAll("<","&lt;")
+      .replaceAll(">","&gt;")
+      .replaceAll("\"","&quot;")
+      .replaceAll("'","&#039;");
+  }
+
+  function labelCell(label) {
+    // Outlook-paste hardening: <font color> is respected more consistently than CSS color.
+    return `
+      <td width="210" valign="top"
+          style="background:#A4284B; padding:8px 10px; border:1px solid #ffffff; color:#ffffff;">
+        <div style="font-family:Arial, sans-serif; font-size:12px; line-height:16px;">
+          <font color="#FFFFFF"><b>${escapeHtml(label)}</b></font>
+        </div>
+      </td>`;
+  }
+
+  function valueCell(html) {
+    return `
+      <td valign="top" style="background:#ffffff; padding:8px 10px; border:1px solid #e5e5e5;">
+        <div style="font-family:Arial, sans-serif; font-size:12px; line-height:16px; color:#111111;">
+          ${html}
+        </div>
+      </td>`;
+  }
+
+  function row(label, valueHtml) {
+    return `<tr>${labelCell(label)}${valueCell(valueHtml)}</tr>`;
+  }
+
+  function generate() {
+    const template = document.getElementById("template").value;
+    const borrower = document.getElementById("borrower").value.trim();
+    const securityProperty = document.getElementById("securityProperty").value.trim();
+    const amountRaw = document.getElementById("amountRaw").value.trim();
+    const extraText = document.getElementById("extraText").value.trim();
+
+    const rows = [];
+    rows.push(row("Borrower", escapeHtml(borrower || "-")));
+    rows.push(row("Security Property", escapeHtml(securityProperty || "-")));
+    rows.push(row("Amount", escapeHtml(amountRaw || "-")));
+
+    if (template === "two") {
+      rows.push(row("Security Property 2", escapeHtml("(add second address field if needed)")));
+    }
+
+    if (extraText) {
+      rows.push(row("Notes", `<span>${escapeHtml(extraText)}</span>`));
+    }
+
+    lastHtml = `
+      <div style="font-family:Arial, sans-serif;">
+        <div style="font-size:14px; margin-bottom:10px;">Please see quote details below:</div>
+        <table cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse; width:100%; max-width:820px;">
+          ${rows.join("")}
+        </table>
+      </div>
+    `;
+
+    lastText = [
+      "Please see quote details below:",
+      "",
+      `Borrower: ${borrower || "-"}`,
+      `Security Property: ${securityProperty || "-"}`,
+      `Amount: ${amountRaw || "-"}`,
+      extraText ? `Notes: ${extraText}` : ""
+    ].filter(Boolean).join("\n");
+
+    document.getElementById("preview").innerHTML = lastHtml;
+  }
+
+  async function copyHtml() {
+    if (!lastHtml) generate();
+    await navigator.clipboard.writeText(lastHtml);
+    alert("HTML copied to clipboard. In Outlook, paste with Keep Source Formatting.");
+  }
+
+  async function copyText() {
+    if (!lastText) generate();
+    await navigator.clipboard.writeText(lastText);
+    alert("Text copied to clipboard.");
+  }
+
+  function openPipelines() {
+    window.open("/api/hubspot-deal-pipelines", "_blank");
+  }
+
+  async function sendToHubSpot() {
+    if (!lastHtml || !lastText) generate();
+
+    const clientName = document.getElementById("clientName").value.trim();
+    const clientEmail = document.getElementById("clientEmail").value.trim();
+    const brokerEmail = document.getElementById("brokerEmail").value.trim();
+    const template = document.getElementById("template").value;
+    const subject = document.getElementById("subject").value.trim() || "FINANCE QUOTE";
+    const amountRaw = document.getElementById("amountRaw").value.trim();
+    const borrower = document.getElementById("borrower").value.trim();
+    const securityProperty = document.getElementById("securityProperty").value.trim();
+
+    if (!clientEmail) {
+      alert("Client email is required.");
+      return;
+    }
+
+    const resp = await fetch("/api/hubspot-sync", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({
+        clientName, clientEmail, brokerEmail,
+        template, subject,
+        text: lastText,
+        amountRaw, borrower, securityProperty
+      })
+    });
+
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      alert(data?.error || "HubSpot sync failed.");
+      return;
+    }
+
+    alert(`Saved to HubSpot.\nContact: ${data.contactId}\nDeal: ${data.dealId}\nMode: ${data.dealMode}\nNote: ${data.noteId}`);
+  }
+</script>
 </body>
 </html>
