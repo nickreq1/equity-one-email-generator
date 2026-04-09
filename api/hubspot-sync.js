@@ -292,8 +292,8 @@ export default async function handler(req, res) {
       (amountRaw ? `Amount (raw): ${amountRaw}\n` : "") +
       (borrower ? `Borrower: ${borrower}\n` : "") +
       (singleAddr ? `Address: ${singleAddr}\n` : "") +
-      (lvr ? `LVR: ${lvr}\n` : "") +
-      (interestRate ? `Interest Rate: ${interestRate}\n` : "") +
+      (lvr ? { lvr: String(lvr) } : {}),
+      (interestRate ? { interest_rate: String(interestRate) } : {}),
       (closedate ? `Close date set to: ${new Date(Number(closedate)).toISOString()}\n` : "") +
       (String(template) === "two_properties" ? `Property 1: ${p1Addr}\nProperty 2: ${p2Addr}\n` : "") +
       "\n----- GENERATED EMAIL (TEXT) -----\n" +
