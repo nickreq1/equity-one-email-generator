@@ -231,7 +231,7 @@ export default async function handler(req, res) {
       p1SecurityProperty,
       p2SecurityProperty,
 
-      // NEW: Deal fields from generator
+      // Deal fields passed from index.html
       lvr,
       interestRate,
       closeDateDays
@@ -258,15 +258,18 @@ export default async function handler(req, res) {
     // Deal fields
     const amount = parseAmountToNumber(amountRaw);
 
+    // Close date = N days from submission (default 30)
     const days = Number(closeDateDays || 30);
     const closedate = Date.now() + Math.round(days * 24 * 60 * 60 * 1000);
 
-    // IMPORTANT: "interest rate" internal name contains a space per your confirmation.
+    // IMPORTANT: HubSpot property names must be lowercase.
+    // If your UI label is "LVR" / "interest rate", the internal names should still be lowercase.
+    // Using: lvr, interest_rate (adjust if your portal uses different internal names).
     const dealProps = {
       ...(amount !== null ? { amount: String(amount) } : {}),
       ...(closedate ? { closedate: String(closedate) } : {}),
-      ...(lvr ? { LVR: String(lvr) } : {}),
-      ...(interestRate ? { ["interest rate"]: String(interestRate) } : {})
+      ...(lvr ? { lvr: String(lvr) } : {}),
+      ...(interestRate ? { interest_rate: String(interestRate) } : {})
     };
 
     const existingQuoteDealId = await findOpenQuoteDealForContact(token, contactId, {
@@ -292,8 +295,8 @@ export default async function handler(req, res) {
       (amountRaw ? `Amount (raw): ${amountRaw}\n` : "") +
       (borrower ? `Borrower: ${borrower}\n` : "") +
       (singleAddr ? `Address: ${singleAddr}\n` : "") +
-      (lvr ? { lvr: String(lvr) } : {}),
-      (interestRate ? { interest_rate: String(interestRate) } : {}),
+      (lvr ? `LVR: ${lvr}\n` : "") +
+      (interestRate ? `Interest Rate: ${interestRate}\n` : "") +
       (closedate ? `Close date set to: ${new Date(Number(closedate)).toISOString()}\n` : "") +
       (String(template) === "two_properties" ? `Property 1: ${p1Addr}\nProperty 2: ${p2Addr}\n` : "") +
       "\n----- GENERATED EMAIL (TEXT) -----\n" +
