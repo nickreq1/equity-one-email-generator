@@ -93,24 +93,32 @@ async function upsertContact(token, { clientEmail, clientName }) {
 }
 
 /**
- * Lookup HubSpot owner id by email using the modern v3 endpoint.
- * Returns string id or null.
+ * Broker contact: create if not exists (email only) and return contact id.
  */
-async function ownerIdByEmail(token, brokerEmail) {
-  const email = String(brokerEmail || "").trim().toLowerCase();
-  if (!email) return null;
+async function upsertContactByEmailOnly(token, email) {
+  const e = String(email || "").trim();
+  if (!e) return null;
 
-  // HubSpot Owners API v3
-  const json = await hsFetch(
-    "https://api.hubapi.com/crm/v3/owners/?email=" + encodeURIComponent(email),
-    { token, method: "GET" }
+  const existingId = await findContactIdByEmail(token, e);
+  if (existingId) return existingId;
+
+  const created = await hsFetch("https://api.hubapi.com/crm/v3/objects/contacts", {
+    token,
+    method: "POST",
+    body: { properties: { email: e } }
+  });
+
+  return created.id;
+}
+
+/**
+ * Associate a contact to a deal (contact_to_deal association).
+ */
+async function associateContactToDeal(token, contactId, dealId) {
+  await hsFetch(
+    `https://api.hubapi.com/crm/v4/objects/contacts/${contactId}/associations/deals/${dealId}/contact_to_deal`,
+    { token, method: "PUT" }
   );
-
-  const owner = (json.results || []).find(
-    (o) => String(o.email || "").trim().toLowerCase() === email
-  );
-
-  return owner?.id ? String(owner.id) : null;
 }
 
 async function listAssociatedDealIds(token, contactId) {
@@ -255,18 +263,8 @@ export default async function handler(req, res) {
     if (!clientEmail) return res.status(400).json({ error: "clientEmail is required" });
 
     const contactId = await upsertContact(token, { clientEmail, clientName });
-    const ownerId = await ownerIdByEmail(token, brokerEmail);
 
-    // Optional: if broker email supplied but no owner found, surface a useful error
-    // (uncomment if you prefer hard-fail rather than leaving owner blank)
-    // if (brokerEmail && !ownerId) {
-    //   return res.status(400).json({ error: `No HubSpot owner found for brokerEmail=${brokerEmail}` });
-    // }
-
-    // Deal name = Address
-    // - two_properties: use Property 1 address
-    // - otherwise: use single securityProperty
-    // - fallback to email
+    // Deal name = Address (same behavior as before)
     const singleAddr = String(securityProperty || "").trim();
     const p1Addr = String(p1SecurityProperty || "").trim();
     const p2Addr = String(p2SecurityProperty || "").trim();
@@ -287,8 +285,6 @@ export default async function handler(req, res) {
     const lvrNum = parseFirstNumber(lvr);
     const interestNum = parseFirstNumber(interestRate);
 
-    // IMPORTANT: HubSpot property names must be lowercase.
-    // Using: lvr, interest_rate (adjust ONLY if your portal uses different internal names).
     const dealProps = {
       ...(amount !== null ? { amount: String(amount) } : {}),
       ...(closedate ? { closedate: String(closedate) } : {}),
@@ -305,11 +301,20 @@ export default async function handler(req, res) {
     if (existingQuoteDealId) {
       dealId = existingQuoteDealId;
       dealMode = "updated_existing_quote_deal";
-      await updateDeal(token, dealId, { dealname, ownerId, properties: dealProps });
+      await updateDeal(token, dealId, { dealname, properties: dealProps });
     } else {
-      dealId = await createDeal(token, { dealname, pipelineId, quoteStageId, ownerId, properties: dealProps });
+      dealId = await createDeal(token, { dealname, pipelineId, quoteStageId, properties: dealProps });
       dealMode = "created_new_quote_deal";
       await associateDealToContact(token, dealId, contactId);
+    }
+
+    // NEW: associate broker email to the deal as a CONTACT association (option 1)
+    let brokerContactId = null;
+    if (brokerEmail) {
+      brokerContactId = await upsertContactByEmailOnly(token, brokerEmail);
+      if (brokerContactId) {
+        await associateContactToDeal(token, brokerContactId, dealId);
+      }
     }
 
     const noteBody =
@@ -328,7 +333,7 @@ export default async function handler(req, res) {
 
     const noteId = await createNote(token, noteBody);
 
-    // Associate note to BOTH contact and deal
+    // Associate note to BOTH client contact and deal
     await associateNoteToContact(token, noteId, contactId);
     await associateNoteToDeal(token, noteId, dealId);
 
@@ -338,7 +343,7 @@ export default async function handler(req, res) {
       dealId,
       dealMode,
       noteId,
-      ownerId: ownerId || ""
+      brokerContactId: brokerContactId || ""
     });
   } catch (e) {
     res.status(500).json({ error: String(e?.message || e) });
