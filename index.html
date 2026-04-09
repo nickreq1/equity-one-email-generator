@@ -826,6 +826,11 @@ Please contact us if you have any questions.`;
         amountRaw: document.getElementById("amount").value,
         borrower: d.borrower,
 
+        // NEW: values to map onto HubSpot Deal properties
+        lvr: d.lvr,
+        interestRate: d.interest,
+        closeDateDays: 30,
+
         // Send both single + two-prop addresses so server can choose dealname correctly
         securityProperty: d.securityProperty || "",
         p1SecurityProperty: d.p1SecurityProperty || "",
