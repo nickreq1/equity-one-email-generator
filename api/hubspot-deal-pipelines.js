@@ -12,10 +12,10 @@ export default async function handler(req, res) {
     const json = await r.json();
     if (!r.ok) return res.status(r.status).json(json);
 
-    const out = (json.results || []).map(p => ({
+    const out = (json.results || []).map((p) => ({
       pipelineId: p.id,
       pipelineLabel: p.label,
-      stages: (p.stages || []).map(s => ({
+      stages: (p.stages || []).map((s) => ({
         stageId: s.id,
         stageLabel: s.label
       }))
