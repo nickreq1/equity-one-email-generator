@@ -92,22 +92,25 @@ async function upsertContact(token, { clientEmail, clientName }) {
   return existingId;
 }
 
+/**
+ * Lookup HubSpot owner id by email using the modern v3 endpoint.
+ * Returns string id or null.
+ */
 async function ownerIdByEmail(token, brokerEmail) {
-  if (!brokerEmail) return null;
+  const email = String(brokerEmail || "").trim().toLowerCase();
+  if (!email) return null;
 
-  const res = await fetch(
-    "https://api.hubapi.com/owners/v2/owners?email=" + encodeURIComponent(brokerEmail),
-    {
-      headers: { Authorization: `Bearer ${token}` }
-    }
+  // HubSpot Owners API v3
+  const json = await hsFetch(
+    "https://api.hubapi.com/crm/v3/owners/?email=" + encodeURIComponent(email),
+    { token, method: "GET" }
   );
 
-  if (!res.ok) return null;
+  const owner = (json.results || []).find(
+    (o) => String(o.email || "").trim().toLowerCase() === email
+  );
 
-  const json = await res.json().catch(() => null);
-  if (Array.isArray(json) && json.length) return json[0].id;
-  if (json?.id) return json.id;
-  return null;
+  return owner?.id ? String(owner.id) : null;
 }
 
 async function listAssociatedDealIds(token, contactId) {
@@ -254,6 +257,12 @@ export default async function handler(req, res) {
     const contactId = await upsertContact(token, { clientEmail, clientName });
     const ownerId = await ownerIdByEmail(token, brokerEmail);
 
+    // Optional: if broker email supplied but no owner found, surface a useful error
+    // (uncomment if you prefer hard-fail rather than leaving owner blank)
+    // if (brokerEmail && !ownerId) {
+    //   return res.status(400).json({ error: `No HubSpot owner found for brokerEmail=${brokerEmail}` });
+    // }
+
     // Deal name = Address
     // - two_properties: use Property 1 address
     // - otherwise: use single securityProperty
@@ -323,7 +332,14 @@ export default async function handler(req, res) {
     await associateNoteToContact(token, noteId, contactId);
     await associateNoteToDeal(token, noteId, dealId);
 
-    res.status(200).json({ ok: true, contactId, dealId, dealMode, noteId, ownerId: ownerId || "" });
+    res.status(200).json({
+      ok: true,
+      contactId,
+      dealId,
+      dealMode,
+      noteId,
+      ownerId: ownerId || ""
+    });
   } catch (e) {
     res.status(500).json({ error: String(e?.message || e) });
   }
