@@ -6,6 +6,11 @@ function splitName(fullName = "") {
   return { firstname: parts[0], lastname: parts.slice(1).join(" ") };
 }
 
+function parseAmountToNumber(amountRaw) {
+  const n = Number(String(amountRaw || "").replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
 async function hsFetch(url, { token, method = "GET", body } = {}) {
   const res = await fetch(url, {
     method,
@@ -18,7 +23,11 @@ async function hsFetch(url, { token, method = "GET", body } = {}) {
 
   const text = await res.text();
   let json;
-  try { json = text ? JSON.parse(text) : {}; } catch { json = { raw: text }; }
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch {
+    json = { raw: text };
+  }
 
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}: ${JSON.stringify(json)}`);
   return json;
@@ -74,9 +83,12 @@ async function upsertContact(token, { clientEmail, clientName }) {
 async function ownerIdByEmail(token, brokerEmail) {
   if (!brokerEmail) return null;
 
-  const res = await fetch("https://api.hubapi.com/owners/v2/owners?email=" + encodeURIComponent(brokerEmail), {
-    headers: { Authorization: `Bearer ${token}` }
-  });
+  const res = await fetch(
+    "https://api.hubapi.com/owners/v2/owners?email=" + encodeURIComponent(brokerEmail),
+    {
+      headers: { Authorization: `Bearer ${token}` }
+    }
+  );
 
   if (!res.ok) return null;
 
@@ -87,10 +99,11 @@ async function ownerIdByEmail(token, brokerEmail) {
 }
 
 async function listAssociatedDealIds(token, contactId) {
-  const assoc = await hsFetch(`https://api.hubapi.com/crm/v4/objects/contacts/${contactId}/associations/deals`, {
-    token
-  });
-  return (assoc.results || []).map(r => String(r.toObjectId));
+  const assoc = await hsFetch(
+    `https://api.hubapi.com/crm/v4/objects/contacts/${contactId}/associations/deals`,
+    { token }
+  );
+  return (assoc.results || []).map((r) => String(r.toObjectId));
 }
 
 async function batchReadDeals(token, dealIds) {
@@ -100,7 +113,7 @@ async function batchReadDeals(token, dealIds) {
     method: "POST",
     body: {
       properties: ["dealstage", "pipeline", "hs_is_closed", "hs_lastmodifieddate", "dealname"],
-      inputs: dealIds.map(id => ({ id }))
+      inputs: dealIds.map((id) => ({ id }))
     }
   });
   return json.results || [];
@@ -112,7 +125,7 @@ async function findOpenQuoteDealForContact(token, contactId, { pipelineId, quote
 
   const deals = await batchReadDeals(token, dealIds);
 
-  const quoteDeals = deals.filter(d => {
+  const quoteDeals = deals.filter((d) => {
     const isClosed = String(d.properties?.hs_is_closed).toLowerCase() === "true";
     if (isClosed) return false;
     if (pipelineId && String(d.properties?.pipeline) !== String(pipelineId)) return false;
@@ -121,14 +134,14 @@ async function findOpenQuoteDealForContact(token, contactId, { pipelineId, quote
 
   if (!quoteDeals.length) return null;
 
-  quoteDeals.sort((a, b) =>
-    Number(b.properties?.hs_lastmodifieddate || 0) - Number(a.properties?.hs_lastmodifieddate || 0)
+  quoteDeals.sort(
+    (a, b) => Number(b.properties?.hs_lastmodifieddate || 0) - Number(a.properties?.hs_lastmodifieddate || 0)
   );
 
   return quoteDeals[0].id;
 }
 
-async function createDeal(token, { dealname, pipelineId, quoteStageId, ownerId }) {
+async function createDeal(token, { dealname, pipelineId, quoteStageId, ownerId, properties = {} }) {
   const deal = await hsFetch("https://api.hubapi.com/crm/v3/objects/deals", {
     token,
     method: "POST",
@@ -137,21 +150,23 @@ async function createDeal(token, { dealname, pipelineId, quoteStageId, ownerId }
         dealname,
         ...(pipelineId ? { pipeline: String(pipelineId) } : {}),
         ...(quoteStageId ? { dealstage: String(quoteStageId) } : {}),
-        ...(ownerId ? { hubspot_owner_id: String(ownerId) } : {})
+        ...(ownerId ? { hubspot_owner_id: String(ownerId) } : {}),
+        ...properties
       }
     }
   });
   return deal.id;
 }
 
-async function updateDeal(token, dealId, { dealname, ownerId }) {
+async function updateDeal(token, dealId, { dealname, ownerId, properties = {} }) {
   await hsFetch(`https://api.hubapi.com/crm/v3/objects/deals/${dealId}`, {
     token,
     method: "PATCH",
     body: {
       properties: {
         ...(dealname ? { dealname } : {}),
-        ...(ownerId ? { hubspot_owner_id: String(ownerId) } : {})
+        ...(ownerId ? { hubspot_owner_id: String(ownerId) } : {}),
+        ...properties
       }
     }
   });
@@ -178,10 +193,9 @@ async function createNote(token, noteBody) {
   return note.id;
 }
 
-async function associateNoteToDeal(token, noteId, dealId) {
-  // v3 association endpoint: note -> deal
+async function associateNoteToContact(token, noteId, contactId) {
   await hsFetch(
-    `https://api.hubapi.com/crm/v3/objects/notes/${noteId}/associations/deals/${dealId}/note_to_deal`,
+    `https://api.hubapi.com/crm/v4/objects/notes/${noteId}/associations/contacts/${contactId}/note_to_contact`,
     { token, method: "PUT" }
   );
 }
@@ -215,7 +229,12 @@ export default async function handler(req, res) {
       borrower,
       securityProperty,
       p1SecurityProperty,
-      p2SecurityProperty
+      p2SecurityProperty,
+
+      // NEW: Deal fields from generator
+      lvr,
+      interestRate,
+      closeDateDays
     } = req.body || {};
 
     if (!clientEmail) return res.status(400).json({ error: "clientEmail is required" });
@@ -236,6 +255,20 @@ export default async function handler(req, res) {
       dealname = p1Addr || singleAddr || clientEmail;
     }
 
+    // Deal fields
+    const amount = parseAmountToNumber(amountRaw);
+
+    const days = Number(closeDateDays || 30);
+    const closedate = Date.now() + Math.round(days * 24 * 60 * 60 * 1000);
+
+    // IMPORTANT: "interest rate" internal name contains a space per your confirmation.
+    const dealProps = {
+      ...(amount !== null ? { amount: String(amount) } : {}),
+      ...(closedate ? { closedate: String(closedate) } : {}),
+      ...(lvr ? { LVR: String(lvr) } : {}),
+      ...(interestRate ? { ["interest rate"]: String(interestRate) } : {})
+    };
+
     const existingQuoteDealId = await findOpenQuoteDealForContact(token, contactId, {
       pipelineId: pipelineId || null,
       quoteStageId
@@ -245,9 +278,9 @@ export default async function handler(req, res) {
     if (existingQuoteDealId) {
       dealId = existingQuoteDealId;
       dealMode = "updated_existing_quote_deal";
-      await updateDeal(token, dealId, { dealname, ownerId });
+      await updateDeal(token, dealId, { dealname, ownerId, properties: dealProps });
     } else {
-      dealId = await createDeal(token, { dealname, pipelineId, quoteStageId, ownerId });
+      dealId = await createDeal(token, { dealname, pipelineId, quoteStageId, ownerId, properties: dealProps });
       dealMode = "created_new_quote_deal";
       await associateDealToContact(token, dealId, contactId);
     }
@@ -259,9 +292,10 @@ export default async function handler(req, res) {
       (amountRaw ? `Amount (raw): ${amountRaw}\n` : "") +
       (borrower ? `Borrower: ${borrower}\n` : "") +
       (singleAddr ? `Address: ${singleAddr}\n` : "") +
-      (String(template) === "two_properties"
-        ? `Property 1: ${p1Addr}\nProperty 2: ${p2Addr}\n`
-        : "") +
+      (lvr ? `LVR: ${lvr}\n` : "") +
+      (interestRate ? `Interest Rate: ${interestRate}\n` : "") +
+      (closedate ? `Close date set to: ${new Date(Number(closedate)).toISOString()}\n` : "") +
+      (String(template) === "two_properties" ? `Property 1: ${p1Addr}\nProperty 2: ${p2Addr}\n` : "") +
       "\n----- GENERATED EMAIL (TEXT) -----\n" +
       (text || "");
 
