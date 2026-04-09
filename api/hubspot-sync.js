@@ -11,6 +11,18 @@ function parseAmountToNumber(amountRaw) {
   return Number.isFinite(n) ? n : null;
 }
 
+function parseFirstNumber(value) {
+  const s = String(value ?? "").trim();
+  if (!s) return null;
+
+  // Extract first number: "65% of Valuation" -> 65, "8.95% p.a." -> 8.95
+  const m = s.match(/-?\d+(?:\.\d+)?/);
+  if (!m) return null;
+
+  const n = Number(m[0]);
+  return Number.isFinite(n) ? n : null;
+}
+
 async function hsFetch(url, { token, method = "GET", body } = {}) {
   const res = await fetch(url, {
     method,
@@ -262,14 +274,17 @@ export default async function handler(req, res) {
     const days = Number(closeDateDays || 30);
     const closedate = Date.now() + Math.round(days * 24 * 60 * 60 * 1000);
 
+    // Only numeric values for HubSpot number properties
+    const lvrNum = parseFirstNumber(lvr);
+    const interestNum = parseFirstNumber(interestRate);
+
     // IMPORTANT: HubSpot property names must be lowercase.
-    // If your UI label is "LVR" / "interest rate", the internal names should still be lowercase.
-    // Using: lvr, interest_rate (adjust if your portal uses different internal names).
+    // Using: lvr, interest_rate (adjust ONLY if your portal uses different internal names).
     const dealProps = {
       ...(amount !== null ? { amount: String(amount) } : {}),
       ...(closedate ? { closedate: String(closedate) } : {}),
-      ...(lvr ? { lvr: String(lvr) } : {}),
-      ...(interestRate ? { interest_rate: String(interestRate) } : {})
+      ...(lvrNum !== null ? { lvr: String(lvrNum) } : {}),
+      ...(interestNum !== null ? { interest_rate: String(interestNum) } : {})
     };
 
     const existingQuoteDealId = await findOpenQuoteDealForContact(token, contactId, {
@@ -295,8 +310,8 @@ export default async function handler(req, res) {
       (amountRaw ? `Amount (raw): ${amountRaw}\n` : "") +
       (borrower ? `Borrower: ${borrower}\n` : "") +
       (singleAddr ? `Address: ${singleAddr}\n` : "") +
-      (lvr ? `LVR: ${lvr}\n` : "") +
-      (interestRate ? `Interest Rate: ${interestRate}\n` : "") +
+      (lvr ? `LVR (raw): ${lvr}\n` : "") +
+      (interestRate ? `Interest Rate (raw): ${interestRate}\n` : "") +
       (closedate ? `Close date set to: ${new Date(Number(closedate)).toISOString()}\n` : "") +
       (String(template) === "two_properties" ? `Property 1: ${p1Addr}\nProperty 2: ${p2Addr}\n` : "") +
       "\n----- GENERATED EMAIL (TEXT) -----\n" +
