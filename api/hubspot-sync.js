@@ -57,41 +57,6 @@ async function findContactIdByEmail(token, email) {
   return json.results?.[0]?.id || null;
 }
 
-async function upsertContact(token, { clientEmail, clientName }) {
-  const existingId = await findContactIdByEmail(token, clientEmail);
-  const { firstname, lastname } = splitName(clientName);
-
-  if (!existingId) {
-    const created = await hsFetch("https://api.hubapi.com/crm/v3/objects/contacts", {
-      token,
-      method: "POST",
-      body: {
-        properties: {
-          email: clientEmail,
-          ...(firstname ? { firstname } : {}),
-          ...(lastname ? { lastname } : {})
-        }
-      }
-    });
-    return created.id;
-  }
-
-  if (clientName) {
-    await hsFetch(`https://api.hubapi.com/crm/v3/objects/contacts/${existingId}`, {
-      token,
-      method: "PATCH",
-      body: {
-        properties: {
-          ...(firstname ? { firstname } : {}),
-          ...(lastname ? { lastname } : {})
-        }
-      }
-    });
-  }
-
-  return existingId;
-}
-
 /**
  * Broker contact: create if not exists (email only) and return contact id.
  */
@@ -243,7 +208,6 @@ export default async function handler(req, res) {
 
     const {
       clientName,
-      clientEmail,
       brokerEmail,
       template,
       subject,
@@ -254,24 +218,25 @@ export default async function handler(req, res) {
       p1SecurityProperty,
       p2SecurityProperty,
 
-      // Deal fields passed from index.html
+      // Deal fields passed from index.html (optional; included here to be forward-compatible)
       lvr,
       interestRate,
       closeDateDays
     } = req.body || {};
 
-    if (!clientEmail) return res.status(400).json({ error: "clientEmail is required" });
+    if (!brokerEmail) return res.status(400).json({ error: "brokerEmail is required" });
 
-    const contactId = await upsertContact(token, { clientEmail, clientName });
+    const brokerContactId = await upsertContactByEmailOnly(token, brokerEmail);
+    if (!brokerContactId) return res.status(400).json({ error: "brokerEmail is required" });
 
-    // Deal name = Address (same behavior as before)
+    // Deal name = Address (fallback to broker email)
     const singleAddr = String(securityProperty || "").trim();
     const p1Addr = String(p1SecurityProperty || "").trim();
     const p2Addr = String(p2SecurityProperty || "").trim();
 
-    let dealname = singleAddr || clientEmail;
+    let dealname = singleAddr || brokerEmail;
     if (String(template) === "two_properties") {
-      dealname = p1Addr || singleAddr || clientEmail;
+      dealname = p1Addr || singleAddr || brokerEmail;
     }
 
     // Deal fields
@@ -292,7 +257,7 @@ export default async function handler(req, res) {
       ...(interestNum !== null ? { interest_rate: String(interestNum) } : {})
     };
 
-    const existingQuoteDealId = await findOpenQuoteDealForContact(token, contactId, {
+    const existingQuoteDealId = await findOpenQuoteDealForContact(token, brokerContactId, {
       pipelineId: pipelineId || null,
       quoteStageId
     });
@@ -305,22 +270,14 @@ export default async function handler(req, res) {
     } else {
       dealId = await createDeal(token, { dealname, pipelineId, quoteStageId, properties: dealProps });
       dealMode = "created_new_quote_deal";
-      await associateDealToContact(token, dealId, contactId);
-    }
-
-    // NEW: associate broker email to the deal as a CONTACT association (option 1)
-    let brokerContactId = null;
-    if (brokerEmail) {
-      brokerContactId = await upsertContactByEmailOnly(token, brokerEmail);
-      if (brokerContactId) {
-        await associateContactToDeal(token, brokerContactId, dealId);
-      }
+      await associateDealToContact(token, dealId, brokerContactId);
     }
 
     const noteBody =
       `Subject: ${subject || "FINANCE QUOTE"}\n` +
       `Template: ${template || ""}\n` +
-      (brokerEmail ? `Broker email: ${brokerEmail}\n` : "") +
+      `Broker email: ${brokerEmail}\n` +
+      (clientName ? `Client name: ${clientName}\n` : "") +
       (amountRaw ? `Amount (raw): ${amountRaw}\n` : "") +
       (borrower ? `Borrower: ${borrower}\n` : "") +
       (singleAddr ? `Address: ${singleAddr}\n` : "") +
@@ -333,17 +290,17 @@ export default async function handler(req, res) {
 
     const noteId = await createNote(token, noteBody);
 
-    // Associate note to BOTH client contact and deal
-    await associateNoteToContact(token, noteId, contactId);
+    // Associate note to broker contact + deal
+    await associateNoteToContact(token, noteId, brokerContactId);
     await associateNoteToDeal(token, noteId, dealId);
 
     res.status(200).json({
       ok: true,
-      contactId,
+      contactId: brokerContactId,
       dealId,
       dealMode,
       noteId,
-      brokerContactId: brokerContactId || ""
+      brokerContactId
     });
   } catch (e) {
     res.status(500).json({ error: String(e?.message || e) });
