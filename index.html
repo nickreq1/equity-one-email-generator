@@ -73,15 +73,11 @@
     <h2 style="margin-top:18px;">HubSpot (for Send to HubSpot)</h2>
     <div class="grid">
       <div>
-        <label for="hsClientEmail">Client email (required)</label>
-        <input id="hsClientEmail" type="email" placeholder="client@example.com" />
-        <div class="hint">This identifies/creates the Contact in HubSpot.</div>
-      </div>
-      <div>
-        <label for="hsBrokerEmail">Broker email (deal owner by email)</label>
+        <label for="hsBrokerEmail">Broker email (required)</label>
         <input id="hsBrokerEmail" type="email" placeholder="broker@example.com" />
-        <div class="hint">Optional. If it matches a HubSpot Owner, the deal will be assigned.</div>
+        <div class="hint">Required. Used to identify/create the Contact in HubSpot.</div>
       </div>
+      <div></div>
     </div>
 
     <div class="grid">
@@ -797,13 +793,12 @@ Please contact us if you have any questions.`;
   async function sendToHubSpot() {
     if (!lastText) generate();
 
-    const clientEmail = document.getElementById("hsClientEmail").value.trim();
     const brokerEmail = document.getElementById("hsBrokerEmail").value.trim();
     const clientNameRaw = document.getElementById("clientName").value.trim();
 
-    if (!clientEmail) {
-      setHubspotStatus("Client email is required for HubSpot.", "bad");
-      alert("Client email is required for HubSpot.");
+    if (!brokerEmail) {
+      setHubspotStatus("Broker email is required for HubSpot.", "bad");
+      alert("Broker email is required for HubSpot.");
       return;
     }
 
@@ -816,7 +811,6 @@ Please contact us if you have any questions.`;
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         clientName: clientNameRaw,
-        clientEmail,
         brokerEmail,
 
         template: d.template,
